@@ -47,41 +47,58 @@ Build a thread-safe, in-memory key-value store that:
 ## Technical Requirements
 
 ### 1. Data Structures
-```go
-// Core version structure
-type Version struct {
-    Value        interface{}
-    CreatedTxnID uint64
-    DeletedTxnID uint64  // 0 means not deleted
-    Timestamp    uint64
-}
+```python
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+from enum import Enum
+import threading
 
-// Main store structure
-type MVCCStore struct {
-    data        map[string][]*Version  // Key -> version chain
-    txnCounter  atomic.Uint64         // Global transaction counter
-    activeTxns  sync.Map              // Active transactions
-    mu          sync.RWMutex          // For data protection
-}
+class TxnState(Enum):
+    ACTIVE = "active"
+    COMMITTED = "committed"
+    ABORTED = "aborted"
 
-// Transaction structure
-type Transaction struct {
-    ID          uint64
-    BeginTime   uint64
-    State       TxnState  // Active, Committed, Aborted
-    ReadSet     map[string]uint64  // Keys read -> version
-    WriteSet    map[string]*Version // Keys written
-}
+@dataclass
+class Version:
+    """Core version structure"""
+    value: Any
+    created_txn_id: int
+    deleted_txn_id: int = 0  # 0 means not deleted
+    timestamp: int = 0
+
+class MVCCStore:
+    """Main store structure"""
+    def __init__(self):
+        self.data: Dict[str, List[Version]] = {}  # Key -> version chain
+        self._txn_counter = 0  # Global transaction counter
+        self._txn_counter_lock = threading.Lock()
+        self.active_txns: Dict[int, 'Transaction'] = {}  # Active transactions
+        self._data_lock = threading.RWLock()  # For data protection
+
+@dataclass
+class Transaction:
+    """Transaction structure"""
+    id: int
+    begin_time: int
+    state: TxnState = TxnState.ACTIVE
+    read_set: Dict[str, int] = None  # Keys read -> version timestamp
+    write_set: Dict[str, Version] = None  # Keys written
+    
+    def __post_init__(self):
+        if self.read_set is None:
+            self.read_set = {}
+        if self.write_set is None:
+            self.write_set = {}
 ```
 
 ### 2. Concurrency
 - Thread-safe for multiple concurrent readers and writers
-- Use atomic operations for transaction ID generation
-- Fine-grained locking or lock-free algorithms where possible
-- No global locks for read operations
+- Use threading locks for transaction ID generation
+- Consider using threading.RLock() for reader-writer scenarios
+- Minimize lock contention for read operations
 
 ### 3. Memory Management
-- Version chains stored as slices for each key
+- Version chains stored as lists for each key
 - No automatic garbage collection initially (per user requirement)
 - Design should allow easy addition of GC later
 - Consider memory pooling for version objects
@@ -95,35 +112,35 @@ type Transaction struct {
 ## Implementation Hints
 
 ### 1. Transaction ID Management
-```go
-func (s *MVCCStore) nextTxnID() uint64 {
-    return s.txnCounter.Add(1)
-}
+```python
+def next_txn_id(self) -> int:
+    """Get next transaction ID atomically"""
+    with self._txn_counter_lock:
+        self._txn_counter += 1
+        return self._txn_counter
 ```
 
 ### 2. Version Visibility Check
-```go
-func (v *Version) isVisibleTo(txn *Transaction) bool {
-    // Version is visible if:
-    // 1. Created before or by this transaction
-    // 2. Not deleted, or deleted after this transaction started
-    return v.CreatedTxnID <= txn.BeginTime && 
-           (v.DeletedTxnID == 0 || v.DeletedTxnID > txn.BeginTime)
-}
+```python
+def is_visible_to(self, txn: Transaction) -> bool:
+    """Check if version is visible to transaction"""
+    # Version is visible if:
+    # 1. Created before or by this transaction
+    # 2. Not deleted, or deleted after this transaction started
+    return (self.created_txn_id <= txn.begin_time and 
+            (self.deleted_txn_id == 0 or self.deleted_txn_id > txn.begin_time))
 ```
 
 ### 3. Finding Visible Version
-```go
-func (s *MVCCStore) findVersion(key string, txn *Transaction) *Version {
-    versions := s.data[key]
-    // Iterate newest to oldest (N2O order)
-    for i := len(versions) - 1; i >= 0; i-- {
-        if versions[i].isVisibleTo(txn) {
-            return versions[i]
-        }
-    }
-    return nil
-}
+```python
+def find_version(self, key: str, txn: Transaction) -> Optional[Version]:
+    """Find visible version for transaction"""
+    versions = self.data.get(key, [])
+    # Iterate newest to oldest (N2O order)
+    for version in reversed(versions):
+        if version.is_visible_to(txn):
+            return version
+    return None
 ```
 
 ### 4. Commit Process
@@ -135,23 +152,54 @@ func (s *MVCCStore) findVersion(key string, txn *Transaction) *Version {
 
 ## API Design
 
-```go
-// Store interface
-type Store interface {
-    Begin() *Transaction
-    Get(txn *Transaction, key string) (interface{}, error)
-    Put(txn *Transaction, key string, value interface{}) error
-    Delete(txn *Transaction, key string) error
-    Commit(txn *Transaction) error
-    Rollback(txn *Transaction) error
-}
+```python
+from abc import ABC, abstractmethod
 
-// Error types
-var (
-    ErrKeyNotFound = errors.New("key not found")
-    ErrTxnAborted  = errors.New("transaction aborted")
-    ErrTxnCommitted = errors.New("transaction already committed")
-)
+class Store(ABC):
+    """Store interface"""
+    
+    @abstractmethod
+    def begin(self) -> Transaction:
+        """Start a new transaction"""
+        pass
+    
+    @abstractmethod
+    def get(self, txn: Transaction, key: str) -> Any:
+        """Get value for key in transaction context"""
+        pass
+    
+    @abstractmethod
+    def put(self, txn: Transaction, key: str, value: Any) -> None:
+        """Put key-value pair in transaction context"""
+        pass
+    
+    @abstractmethod
+    def delete(self, txn: Transaction, key: str) -> None:
+        """Delete key in transaction context"""
+        pass
+    
+    @abstractmethod
+    def commit(self, txn: Transaction) -> None:
+        """Commit transaction"""
+        pass
+    
+    @abstractmethod
+    def rollback(self, txn: Transaction) -> None:
+        """Rollback transaction"""
+        pass
+
+# Exception types
+class KeyNotFoundError(Exception):
+    """Raised when key is not found"""
+    pass
+
+class TransactionAbortedError(Exception):
+    """Raised when transaction is aborted"""
+    pass
+
+class TransactionCommittedError(Exception):
+    """Raised when operating on already committed transaction"""
+    pass
 ```
 
 ## Acceptance Criteria
@@ -187,7 +235,7 @@ Based on user requirements, design should support:
 
 ## Assumptions
 
-1. Values can be any type (interface{})
+1. Values can be any type (Python's Any type)
 2. Keys are strings
 3. No persistence required
 4. No size limits on values
