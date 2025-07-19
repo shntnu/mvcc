@@ -97,6 +97,18 @@ Tests cover:
 - Edge cases and error conditions
 - Read Committed specific behaviors
 
+## Known Issues
+
+### Write-Write Conflict Detection
+The current implementation does not detect write-write conflicts. The test `test_concurrent_read_modify_write` in `test_mvcc_store.py` is currently failing because it expects proper conflict detection where only one of two concurrent transactions modifying the same key should succeed.
+
+Currently, both transactions succeed with a "last-write-wins" behavior, which can lead to lost updates. The failing test demonstrates that when T2 and T3 both read key1=100 and perform calculations, T3's commit overwrites T2's changes without detecting the conflict.
+
+To fix this issue, the implementation needs to:
+1. Add a `WriteConflictError` exception class
+2. Implement conflict detection in the `commit()` method by checking if any keys being written were read at an earlier version than the current committed version
+3. Abort transactions that would cause lost updates
+
 ## Limitations & Future Work
 
 This is an **exploratory implementation** with several limitations:
@@ -106,6 +118,7 @@ This is an **exploratory implementation** with several limitations:
 3. **In-memory Only**: No persistence
 4. **Simple Types**: Values are integers only
 5. **No Performance Optimization**: Not optimized for high throughput
+6. **No Write-Write Conflict Detection**: Currently uses last-write-wins instead of detecting conflicts (see Known Issues above)
 
 Potential extensions:
 - Add thread safety with proper locking
