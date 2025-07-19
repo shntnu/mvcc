@@ -25,7 +25,6 @@ class TestBasicOperations:
         txn = store.begin()
         
         assert txn.id == 1
-        assert txn.begin_time == 1
         assert txn.state == TxnState.ACTIVE
         assert txn.read_set == {}
         assert txn.write_set == {}
@@ -190,8 +189,8 @@ class TestTransactionStates:
 class TestVersionVisibility:
     """Test version visibility and isolation"""
     
-    def test_snapshot_isolation(self):
-        """Test snapshot isolation behavior (despite being called Read Committed)"""
+    def test_read_committed_isolation(self):
+        """Test Read Committed isolation level"""
         store = MVCCStore()
         
         # T1: Insert initial value
@@ -208,10 +207,10 @@ class TestVersionVisibility:
         store.put(txn3, "key1", 200)
         store.commit(txn3)
         
-        # T2: Still sees old value (snapshot at begin time)
-        assert store.get(txn2, "key1") == 100
+        # T2: With Read Committed, sees the new committed value
+        assert store.get(txn2, "key1") == 200
         
-        # T4: New transaction sees new value
+        # T4: New transaction also sees new value
         txn4 = store.begin()
         assert store.get(txn4, "key1") == 200
     
@@ -231,11 +230,10 @@ class TestVersionVisibility:
         # T1: Commit
         store.commit(txn1)
         
-        # T2: Still doesn't see it (snapshot isolation)
-        with pytest.raises(KeyNotFoundError):
-            store.get(txn2, "key1")
+        # T2: With Read Committed, now sees the committed value
+        assert store.get(txn2, "key1") == 100
         
-        # T3: New transaction sees it
+        # T3: New transaction also sees it
         txn3 = store.begin()
         assert store.get(txn3, "key1") == 100
     
@@ -257,10 +255,11 @@ class TestVersionVisibility:
         store.delete(txn3, "key1")
         store.commit(txn3)
         
-        # T2: Still sees value (not deleted at T2's begin time)
-        assert store.get(txn2, "key1") == 100
+        # T2: With Read Committed, now sees the deletion
+        with pytest.raises(KeyNotFoundError):
+            store.get(txn2, "key1")
         
-        # T4: New transaction doesn't see deleted value
+        # T4: New transaction also doesn't see deleted value
         txn4 = store.begin()
         with pytest.raises(KeyNotFoundError):
             store.get(txn4, "key1")
@@ -406,6 +405,47 @@ class TestEdgeCases:
             assert txn_ids[i] == txn_ids[i-1] + 1
 
 
+class TestReadCommittedBehavior:
+    """Test specific Read Committed isolation behaviors"""
+    
+    def test_long_running_transaction_sees_commits(self):
+        """Test that a long-running transaction sees commits from other transactions"""
+        store = MVCCStore()
+        
+        # Setup: Create initial value
+        setup_txn = store.begin()
+        store.put(setup_txn, "counter", 0)
+        store.commit(setup_txn)
+        
+        # T1: Long-running transaction starts
+        txn1 = store.begin()
+        assert store.get(txn1, "counter") == 0
+        
+        # T2: Updates counter to 10 and commits
+        txn2 = store.begin()
+        store.put(txn2, "counter", 10)
+        store.commit(txn2)
+        
+        # T1: Sees the new value (Read Committed)
+        assert store.get(txn1, "counter") == 10
+        
+        # T3: Updates counter to 20 and commits
+        txn3 = store.begin()
+        store.put(txn3, "counter", 20)
+        store.commit(txn3)
+        
+        # T1: Sees the newer value
+        assert store.get(txn1, "counter") == 20
+        
+        # T1 can still commit
+        store.put(txn1, "counter", 30)
+        store.commit(txn1)
+        
+        # T4: Sees T1's update
+        txn4 = store.begin()
+        assert store.get(txn4, "counter") == 30
+
+
 class TestComplexScenarios:
     """Test complex multi-transaction scenarios"""
     
@@ -468,9 +508,13 @@ class TestComplexScenarios:
         store.delete(txn2, "key4")
         store.commit(txn2)
         
-        # T1: Can still see all keys (started before deletes)
+        # T1: With Read Committed, sees the deletions
         for i in range(5):
-            if i == 1:
+            if i == 0 or i == 4:
+                # These were deleted by T2
+                with pytest.raises(KeyNotFoundError):
+                    store.get(txn1, f"key{i}")
+            elif i == 1:
                 assert store.get(txn1, f"key{i}") == 100
             elif i == 3:
                 assert store.get(txn1, f"key{i}") == 300

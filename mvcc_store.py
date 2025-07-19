@@ -6,7 +6,7 @@ of each key-value pair to enable concurrent transactions without blocking.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from enum import Enum
 from abc import ABC, abstractmethod
 import time
@@ -35,14 +35,11 @@ class Version:
     deleted_txn_id: int = 0  # 0 means not deleted
     timestamp: int = field(default_factory=lambda: int(time.time() * 1000000))  # microseconds
     
-    def is_visible_to(self, txn_begin_time: int) -> bool:
+    def is_deleted(self) -> bool:
         """
-        Check if this version is visible to a transaction that began at given time.
-        
-        A version is visible if it was created before or at the transaction's begin time.
-        Whether it's deleted is checked separately.
+        Check if this version represents a deletion.
         """
-        return self.created_txn_id <= txn_begin_time
+        return self.deleted_txn_id != 0
 
 
 @dataclass
@@ -52,13 +49,11 @@ class Transaction:
     
     Attributes:
         id: Unique transaction ID
-        begin_time: Transaction start timestamp (used for visibility)
         state: Current transaction state
         read_set: Keys read during transaction (for future conflict detection)
         write_set: Buffered writes waiting to be committed
     """
     id: int
-    begin_time: int
     state: TxnState = TxnState.ACTIVE
     read_set: Dict[str, int] = field(default_factory=dict)  # key -> version timestamp
     write_set: Dict[str, Version] = field(default_factory=dict)  # key -> new version
@@ -130,6 +125,7 @@ class MVCCStore(Store):
         self.data: Dict[str, List[Version]] = {}  # key -> list of versions (newest first)
         self._txn_counter = 0  # Global transaction counter
         self.active_txns: Dict[int, Transaction] = {}  # Currently active transactions
+        self.committed_txns: Set[int] = set()  # IDs of committed transactions
         self._timestamp_counter = 0  # Global timestamp counter
     
     def _next_txn_id(self) -> int:
@@ -147,7 +143,6 @@ class MVCCStore(Store):
         txn_id = self._next_txn_id()
         txn = Transaction(
             id=txn_id,
-            begin_time=txn_id,  # Using txn_id as logical timestamp for simplicity
             state=TxnState.ACTIVE
         )
         self.active_txns[txn_id] = txn
@@ -166,10 +161,12 @@ class MVCCStore(Store):
         
         # Iterate through versions (newest to oldest due to N2O ordering)
         for version in versions:
-            if version.is_visible_to(txn.begin_time):
-                # Check if this version represents a deletion
-                if version.deleted_txn_id != 0 and version.deleted_txn_id <= txn.begin_time:
-                    # This version is a tombstone that's visible to us
+            # For Read Committed: version is visible if its creating transaction is committed
+            # or if it's in our own write set (we see our own writes)
+            if version.created_txn_id == txn.id or version.created_txn_id in self.committed_txns:
+                # Check if this version was deleted by a committed transaction
+                if version.deleted_txn_id != 0 and version.deleted_txn_id in self.committed_txns:
+                    # This is a deleted version
                     return None
                 return version
         
@@ -246,6 +243,9 @@ class MVCCStore(Store):
             
             # Insert at beginning (newest first - N2O order)
             self.data[key].insert(0, version)
+        
+        # Mark transaction as committed
+        self.committed_txns.add(txn.id)
         
         # Update transaction state
         txn.state = TxnState.COMMITTED
