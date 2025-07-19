@@ -3,7 +3,10 @@
     "allow": [
       "WebFetch(domain:www.postgresql.org)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(uv add:*)",
+      "Bash(uv run:*)",
+      "Bash(rm:*)"
     ],
     "deny": []
   }
