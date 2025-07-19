@@ -1,0 +1,19 @@
+{
+  "id": "mvcc-key-value-store",
+  "started": "2025-01-19T07:40:00Z",
+  "lastUpdated": "2025-01-19T07:50:00Z",
+  "status": "active",
+  "phase": "complete",
+  "progress": {
+    "discovery": {
+      "answered": 5,
+      "total": 5
+    },
+    "detail": {
+      "answered": 5,
+      "total": 5
+    }
+  },
+  "contextFiles": [],
+  "relatedFeatures": []
+}
