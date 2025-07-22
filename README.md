@@ -6,6 +6,13 @@ An experimental in-memory key-value store implementing Multi-Version Concurrency
 
 This is an exploratory implementation designed to understand MVCC concepts and transaction isolation. The store maintains multiple versions of each key-value pair, allowing concurrent transactions to read and write without blocking each other.
 
+### Implementation Variants
+
+This repository contains two implementations:
+
+1. **`mvcc_store.py`** - The original comprehensive implementation (~270 lines) with full feature set
+2. **`mvcc_store_o3.py`** - A simplified proof-of-concept version (~130 lines) that demonstrates core MVCC concepts with minimal code
+
 ## Key Features
 
 - **Read Committed Isolation**: Each read sees the latest committed data at the time of the read
@@ -82,12 +89,28 @@ Deletions create "tombstone" versions that mark keys as deleted. The visibility 
 - **COMMITTED**: Changes applied to main store
 - **ABORTED**: Transaction rolled back
 
+### Simplified Implementation (mvcc_store_o3.py)
+
+The `o3` variant makes these simplifications for clarity:
+
+- **No timestamps**: Visibility is based solely on transaction commit status
+- **Simpler deletion**: Uses a `deleted` boolean flag instead of `deleted_txn_id`
+- **No conflict detection**: Implements pure "last-write-wins" behavior
+- **Minimal data structures**: Just transaction IDs, version chains, and a committed set
+- **No optimization**: Focuses on correctness over performance
+
+This makes it ideal for understanding MVCC fundamentals without implementation complexity.
+
 ## Testing
 
-Run the comprehensive test suite:
+Run the test suites:
 
 ```bash
+# Test the original implementation
 uv run python -m pytest test_mvcc_store.py -v
+
+# Test the simplified implementation
+uv run python -m pytest test_mvcc_store_o3.py -v
 ```
 
 Tests cover:
@@ -96,6 +119,8 @@ Tests cover:
 - Concurrent transaction handling
 - Edge cases and error conditions
 - Read Committed specific behaviors
+
+Note: The simplified `o3` version has a minimal test suite focusing on core functionality.
 
 ## Known Issues
 
@@ -119,6 +144,20 @@ This is an **exploratory implementation** with several limitations:
 4. **Simple Types**: Values are integers only
 5. **No Performance Optimization**: Not optimized for high throughput
 6. **No Write-Write Conflict Detection**: Currently uses last-write-wins instead of detecting conflicts (see Known Issues above)
+
+### Choosing Between Implementations
+
+- **Use `mvcc_store.py`** when you need:
+  - Full transaction tracking with timestamps
+  - Detailed version management
+  - A foundation for adding conflict detection
+  - More comprehensive error handling
+
+- **Use `mvcc_store_o3.py`** when you need:
+  - Minimal code to understand MVCC concepts
+  - A clean proof-of-concept for teaching/learning
+  - Quick prototyping without extra complexity
+  - Pure demonstration of Read Committed isolation
 
 Potential extensions:
 - Add thread safety with proper locking
